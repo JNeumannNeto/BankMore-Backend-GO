@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - bankmore-network
+
+  kafka:
+    image: confluentinc/cp-kafka:6.2.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    networks:
+      - bankmore-network
+
+  sqlite-db:
+    image: alpine:latest
+    volumes:
+      - ./database:/database
+      - ../database/init.sql:/init.sql
+    command: sh -c "mkdir -p /database && touch /database/bankmore.db && tail -f /dev/null"
+    networks:
+      - bankmore-network
+
+  account-api:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile.account
+    ports:
+      - "8001:8001"
+    depends_on:
+      - kafka
+      - sqlite-db
+    environment:
+      - DB_PATH=/database/bankmore.db
+      - KAFKA_BROKERS=kafka:9092
+      - JWT_SECRET=your-secret-key-here-change-in-production
+      - PORT=8001
+    volumes:
+      - ./database:/database
+    networks:
+      - bankmore-network
+    restart: unless-stopped
+
+  transfer-api:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile.transfer
+    ports:
+      - "8002:8002"
+    depends_on:
+      - kafka
+      - sqlite-db
+      - account-api
+    environment:
+      - DB_PATH=/database/bankmore.db
+      - KAFKA_BROKERS=kafka:9092
+      - JWT_SECRET=your-secret-key-here-change-in-production
+      - ACCOUNT_API_URL=http://account-api:8001
+      - PORT=8002
+    volumes:
+      - ./database:/database
+    networks:
+      - bankmore-network
+    restart: unless-stopped
+
+  fee-api:
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile.fee
+    ports:
+      - "8003:8003"
+    depends_on:
+      - kafka
+      - sqlite-db
+    environment:
+      - DB_PATH=/database/bankmore.db
+      - KAFKA_BROKERS=kafka:9092
+      - TRANSFER_FEE_AMOUNT=2.00
+      - ACCOUNT_API_URL=http://account-api:8001
+      - PORT=8003
+    volumes:
+      - ./database:/database
+    networks:
+      - bankmore-network
+    restart: unless-stopped
+
+volumes:
+  database:
+
+networks:
+  bankmore-network:
+    driver: bridge
